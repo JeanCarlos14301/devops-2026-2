@@ -101,6 +101,9 @@ function normalizeCategory(value: unknown): string | null {
   return category.length > 0 ? category : null;
 }
 
+// Un solo collator para ordenar: crear uno en cada comparación era el 90% del tiempo de list.
+const byName = new Intl.Collator("es", { sensitivity: "base" });
+
 function copy(product: Product): Product {
   return {
     ...product,
@@ -111,6 +114,8 @@ function copy(product: Product): Product {
 
 export class ProductStore {
   private readonly products = new Map<string, Product>();
+  // sku normalizado -> id, para no recorrer todo el almacén al buscar o validar un sku.
+  private readonly skuIndex = new Map<string, string>();
 
   create(input: CreateProductInput): Product {
     if (typeof input !== "object" || input === null) {
@@ -138,6 +143,7 @@ export class ProductStore {
       updatedAt: new Date(now.getTime()),
     };
     this.products.set(product.id, product);
+    this.skuIndex.set(sku, product.id);
     return copy(product);
   }
 
@@ -173,7 +179,7 @@ export class ProductStore {
       })
       .sort(
         (a, b) =>
-          a.name.localeCompare(b.name, "es", { sensitivity: "base" }) ||
+          byName.compare(a.name, b.name) ||
           (a.sku < b.sku ? -1 : a.sku > b.sku ? 1 : 0),
       )
       .map(copy);
@@ -206,11 +212,19 @@ export class ProductStore {
 
     const updated: Product = { ...current, ...changes, updatedAt: new Date() };
     this.products.set(id, updated);
+    if (updated.sku !== current.sku) {
+      this.skuIndex.delete(current.sku);
+      this.skuIndex.set(updated.sku, id);
+    }
     return copy(updated);
   }
 
   remove(id: string): boolean {
-    return this.products.delete(id);
+    const current = this.products.get(id);
+    if (!current) return false;
+    this.products.delete(id);
+    this.skuIndex.delete(current.sku);
+    return true;
   }
 
   adjustStock(id: string, delta: number): Product {
@@ -229,9 +243,7 @@ export class ProductStore {
   }
 
   private findBySku(sku: string): Product | undefined {
-    for (const product of this.products.values()) {
-      if (product.sku === sku) return product;
-    }
-    return undefined;
+    const id = this.skuIndex.get(sku);
+    return id === undefined ? undefined : this.products.get(id);
   }
 }
